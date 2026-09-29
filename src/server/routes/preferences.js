@@ -10,6 +10,8 @@ const validate = require('jsonschema').validate;
 const { getConnection } = require('../db');
 const { STRING_GENERAL_MAX_LENGTH, STRING_SHORT_MAX_LENGTH: SHORT_STRING_MAX_LENGTH } = require('../util/validationConstants');
 const { HTTP_CODES } = require('../util/httpCodes');
+const { isValidIsoDateTime } = require('../util/timeValidation');
+const { MAX_FILE_SIZE_LIMIT, MAX_METER_READING_GAP } = require('../../common/preferencesValidationConstants');
 
 const router = express.Router();
 
@@ -65,12 +67,12 @@ router.post('/', adminAuthMiddleware('edit site preferences'), async (req, res) 
 					defaultWarningFileSize: {
 						type: 'number',
 						minimum: 0,
-						maximum: 1000000000
+						maximum: MAX_FILE_SIZE_LIMIT
 					},
 					defaultFileSizeLimit: {
 						type: 'number',
 						minimum: 0,
-						maximum: 1000000000
+						maximum: MAX_FILE_SIZE_LIMIT
 					},
 					defaultAreaNormalization: {
 						type: 'boolean'
@@ -79,6 +81,7 @@ router.post('/', adminAuthMiddleware('edit site preferences'), async (req, res) 
 						type: 'string',
 						maxLength: SHORT_STRING_MAX_LENGTH
 					},
+					// PostgreSQL interval string; does not use moment so only length-limited here
 					defaultMeterReadingFrequency: {
 						type: 'string',
 						maxLength: SHORT_STRING_MAX_LENGTH
@@ -94,7 +97,7 @@ router.post('/', adminAuthMiddleware('edit site preferences'), async (req, res) 
 					defaultMeterReadingGap: {
 						type: 'number',
 						minimum: 0,
-						maximum: 86400
+						maximum: MAX_METER_READING_GAP
 					},
 					defaultMeterMaximumErrors: {
 						type: 'number',
@@ -110,16 +113,25 @@ router.post('/', adminAuthMiddleware('edit site preferences'), async (req, res) 
 		}
 	};
 	if (!validate(req.body, validParams).valid) {
-		res.sendStatus(HTTP_CODES.BAD_REQUEST);
-	} else {
-		const conn = getConnection();
-		try {
-			const rows = await Preferences.update(req.body.preferences, conn);
-			res.json(rows);
-		} catch (err) {
-			log.error(`Error while performing POST update preferences: ${err}`, err);
-			res.sendStatus(HTTP_CODES.INTERNAL_SERVER_ERROR);
-		}
+		return res.sendStatus(HTTP_CODES.BAD_REQUEST);
+	}
+
+	const prefs = req.body.preferences;
+	if (
+		// preferences.js does not use moment; validate date strings directly
+		(prefs.defaultMeterMinimumDate && !isValidIsoDateTime(prefs.defaultMeterMinimumDate)) ||
+		(prefs.defaultMeterMaximumDate && !isValidIsoDateTime(prefs.defaultMeterMaximumDate))
+	) {
+		return res.sendStatus(HTTP_CODES.BAD_REQUEST);
+	}
+
+	const conn = getConnection();
+	try {
+		const rows = await Preferences.update(prefs, conn);
+		return res.json(rows);
+	} catch (err) {
+		log.error(`Error while performing POST update preferences: ${err}`, err);
+		return res.sendStatus(HTTP_CODES.INTERNAL_SERVER_ERROR);
 	}
 });
 
